@@ -10,4 +10,4 @@ services:
     volumes:
       - ./data:/app/data
     environment:
-      - TZ=Europe/Warsaw
+      - TZ=Europe/Kyiv

@@ -60,6 +60,17 @@ KYIV_TZ = ZoneInfo("Europe/Kyiv")
 # Overdue threshold in minutes
 OVERDUE_THRESHOLD_MINUTES = 45
 
+
+def format_interval(enabled: bool, interval: int) -> str:
+    """Format monitoring interval for display."""
+    if not enabled:
+        return "вимкнено"
+    if interval == 720:
+        return "2 рази на добу"
+    if interval == 360:
+        return "кожні 6 год"
+    return f"{interval} хв"
+
 # Global scraper instance
 scraper: PUESCScraper = None
 
@@ -175,12 +186,7 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for v in vehicles:
         status = "✅" if v.monitoring_enabled else "❌"
-        if not v.monitoring_enabled:
-            interval = "вимкнено"
-        elif v.monitoring_interval == 720:
-            interval = "2 рази на добу"
-        else:
-            interval = f"{v.monitoring_interval} хв"
+        interval = format_interval(v.monitoring_enabled, v.monitoring_interval)
         text += f"*{v.name}* ({v.registration_number})\n   Моніторинг: {status} {interval}\n\n"
         keyboard.append([
             InlineKeyboardButton(f"⚙️ {v.name}", callback_data=f"sched_{v.id}")
@@ -616,12 +622,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         for v in vehicles:
             status = "✅" if v.monitoring_enabled else "❌"
-            if not v.monitoring_enabled:
-                interval = "вимкнено"
-            elif v.monitoring_interval == 720:
-                interval = "2 рази на добу"
-            else:
-                interval = f"{v.monitoring_interval} хв"
+            interval = format_interval(v.monitoring_enabled, v.monitoring_interval)
             text += f"*{v.name}* ({v.registration_number})\n   Моніторинг: {status} {interval}\n\n"
             keyboard.append([
                 InlineKeyboardButton(f"⚙️ {v.name}", callback_data=f"sched_{v.id}")
@@ -644,12 +645,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         status = "✅ Увімкнено" if vehicle.monitoring_enabled else "❌ Вимкнено"
-        current_interval = "2 рази на добу" if vehicle.monitoring_interval == 720 else f"{vehicle.monitoring_interval} хв"
+        current_interval = format_interval(True, vehicle.monitoring_interval)
 
         keyboard = [
             [InlineKeyboardButton("⏱ 15 хв", callback_data=f"setint_{vehicle_id}_15")],
             [InlineKeyboardButton("⏱ 30 хв", callback_data=f"setint_{vehicle_id}_30")],
             [InlineKeyboardButton("⏱ 60 хв", callback_data=f"setint_{vehicle_id}_60")],
+            [InlineKeyboardButton("🕕 Кожні 6 год", callback_data=f"setint_{vehicle_id}_360")],
             [InlineKeyboardButton("🌅 2 рази на добу", callback_data=f"setint_{vehicle_id}_720")],
             [InlineKeyboardButton("🔴 Вимкнути", callback_data=f"setint_{vehicle_id}_0")],
             [InlineKeyboardButton("⬅️ Назад", callback_data="schedule")],
@@ -687,7 +689,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await db.update_monitoring(vehicle_id, enabled=True, interval=interval)
             # Reschedule monitoring jobs
             await schedule_vehicle_jobs(context.application)
-            interval_text = "2 рази на добу" if interval == 720 else f"{interval} хв"
+            interval_text = format_interval(True, interval)
             await query.edit_message_text(
                 f"✅ Моніторинг для *{vehicle.name}* увімкнено.\n"
                 f"Інтервал перевірки: *{interval_text}*\n\n"

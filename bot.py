@@ -32,7 +32,24 @@ logger = logging.getLogger(__name__)
 
 # Bot configuration
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-ALLOWED_USER_ID = int(os.getenv('ALLOWED_USER_ID', 0))
+
+# Parse allowed user IDs (comma-separated)
+def parse_allowed_users() -> set[int]:
+    """Parse ALLOWED_USER_IDS from environment variable."""
+    ids_str = os.getenv('ALLOWED_USER_IDS', '')
+    if not ids_str:
+        # Fallback to old single-user variable for backwards compatibility
+        single_id = os.getenv('ALLOWED_USER_ID', '')
+        if single_id:
+            return {int(single_id)}
+        return set()
+    
+    try:
+        return {int(uid.strip()) for uid in ids_str.split(',') if uid.strip()}
+    except ValueError:
+        return set()
+
+ALLOWED_USER_IDS = parse_allowed_users()
 
 # Conversation states
 ADD_NAME, ADD_REFERENCE, ADD_REGISTRATION, ADD_LOCATOR = range(4)
@@ -51,7 +68,7 @@ def auth_required(func):
     """Decorator to check if user is authorized."""
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
-        if ALLOWED_USER_ID and user_id != ALLOWED_USER_ID:
+        if ALLOWED_USER_IDS and user_id not in ALLOWED_USER_IDS:
             await update.message.reply_text("⛔ Доступ заборонено.")
             return
         return await func(update, context)
@@ -368,7 +385,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     # Check authorization
-    if ALLOWED_USER_ID and query.from_user.id != ALLOWED_USER_ID:
+    if ALLOWED_USER_IDS and query.from_user.id not in ALLOWED_USER_IDS:
         await query.edit_message_text("⛔ Доступ заборонено.")
         return
 
@@ -572,16 +589,18 @@ async def monitoring_job(context: ContextTypes.DEFAULT_TYPE):
                         f"[🗺 Відкрити в Google Maps]({maps_link})"
                     )
 
-                    try:
-                        await context.bot.send_message(
-                            chat_id=ALLOWED_USER_ID,
-                            text=alert_text,
-                            parse_mode='Markdown',
-                            disable_web_page_preview=False
-                        )
-                        logger.info(f"Overdue alert sent for {vehicle.name}")
-                    except Exception as e:
-                        logger.error(f"Failed to send alert for {vehicle.name}: {e}")
+                    # Send alert to all allowed users
+                    for user_id in ALLOWED_USER_IDS:
+                        try:
+                            await context.bot.send_message(
+                                chat_id=user_id,
+                                text=alert_text,
+                                parse_mode='Markdown',
+                                disable_web_page_preview=False
+                            )
+                            logger.info(f"Overdue alert sent for {vehicle.name} to user {user_id}")
+                        except Exception as e:
+                            logger.error(f"Failed to send alert for {vehicle.name} to user {user_id}: {e}")
 
         except Exception as e:
             logger.error(f"Error monitoring {vehicle.name}: {e}")
@@ -646,8 +665,10 @@ def main():
         print("Error: TELEGRAM_BOT_TOKEN not set")
         return
 
-    if not ALLOWED_USER_ID:
-        print("Warning: ALLOWED_USER_ID not set - bot is open to everyone!")
+    if not ALLOWED_USER_IDS:
+        print("Warning: ALLOWED_USER_IDS not set - bot is open to everyone!")
+    else:
+        print(f"Allowed users: {ALLOWED_USER_IDS}")
 
     # Create application
     app = Application.builder().token(TOKEN).post_init(post_init).post_shutdown(post_shutdown).build()

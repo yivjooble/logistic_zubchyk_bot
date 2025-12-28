@@ -132,3 +132,13 @@ async def get_monitored_vehicles() -> list[Vehicle]:
         )
         rows = await cursor.fetchall()
         return [Vehicle(**dict(row)) for row in rows]
+
+
+async def update_vehicle_reference(vehicle_id: int, reference_number: str):
+    """Update the reference number (RMPD) for a vehicle."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE vehicles SET reference_number = ? WHERE id = ?",
+            (reference_number, vehicle_id)
+        )
+        await db.commit()

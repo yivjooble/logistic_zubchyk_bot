@@ -52,7 +52,7 @@ def parse_allowed_users() -> set[int]:
 ALLOWED_USER_IDS = parse_allowed_users()
 
 # Conversation states
-ADD_NAME, ADD_REFERENCE, ADD_REGISTRATION, ADD_LOCATOR = range(4)
+ADD_NAME, ADD_REFERENCE, ADD_REGISTRATION, ADD_LOCATOR, EDIT_RMPD = range(5)
 
 # Kyiv timezone
 KYIV_TZ = ZoneInfo("Europe/Kyiv")
@@ -113,6 +113,12 @@ async def list_vehicles(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = "🚛 *Ваші авто:*\n\n"
     keyboard = []
+    
+    # Add "Check all" button at the top if there are multiple vehicles
+    if len(vehicles) > 1:
+        keyboard.append([
+            InlineKeyboardButton("🔄 Перевірити всіх", callback_data="check_all")
+        ])
 
     for v in vehicles:
         text += (
@@ -122,7 +128,8 @@ async def list_vehicles(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"   📡 `{v.locator_id}`\n\n"
         )
         keyboard.append([
-            InlineKeyboardButton(f"📍 Перевірити {v.name}", callback_data=f"check_{v.id}")
+            InlineKeyboardButton(f"📍 {v.name}", callback_data=f"check_{v.id}"),
+            InlineKeyboardButton("✏️", callback_data=f"edit_menu_{v.id}")
         ])
 
     await update.message.reply_text(
@@ -168,7 +175,12 @@ async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     for v in vehicles:
         status = "✅" if v.monitoring_enabled else "❌"
-        interval = f"{v.monitoring_interval} хв" if v.monitoring_enabled else "вимкнено"
+        if not v.monitoring_enabled:
+            interval = "вимкнено"
+        elif v.monitoring_interval == 720:
+            interval = "2 рази на добу"
+        else:
+            interval = f"{v.monitoring_interval} хв"
         text += f"*{v.name}* ({v.registration_number})\n   Моніторинг: {status} {interval}\n\n"
         keyboard.append([
             InlineKeyboardButton(f"⚙️ {v.name}", callback_data=f"sched_{v.id}")
@@ -263,6 +275,60 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+# === Edit RMPD Conversation ===
+
+async def edit_rmpd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start editing RMPD for a vehicle (called from callback)."""
+    query = update.callback_query
+    await query.answer()
+    
+    vehicle_id = int(query.data.split("_")[2])
+    vehicle = await db.get_vehicle(vehicle_id)
+    
+    if not vehicle:
+        await query.edit_message_text("❌ Авто не знайдено.")
+        return ConversationHandler.END
+    
+    context.user_data['edit_vehicle_id'] = vehicle_id
+    context.user_data['edit_vehicle_name'] = vehicle.name
+    
+    await query.edit_message_text(
+        f"✏️ *Редагування RMPD для {vehicle.name}*\n\n"
+        f"Поточний номер: `{vehicle.reference_number}`\n\n"
+        f"Введіть новий номер RMPD (або /cancel для скасування):",
+        parse_mode='Markdown'
+    )
+    return EDIT_RMPD
+
+
+async def edit_rmpd_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Save the new RMPD number."""
+    new_rmpd = update.message.text
+    vehicle_id = context.user_data.get('edit_vehicle_id')
+    vehicle_name = context.user_data.get('edit_vehicle_name', 'Авто')
+    
+    if not vehicle_id:
+        await update.message.reply_text("❌ Помилка: ID авто не знайдено.")
+        return ConversationHandler.END
+    
+    await db.update_vehicle_reference(vehicle_id, new_rmpd)
+    
+    keyboard = [[
+        InlineKeyboardButton("📍 Перевірити зараз", callback_data=f"check_{vehicle_id}")
+    ]]
+    
+    await update.message.reply_text(
+        f"✅ *RMPD оновлено!*\n\n"
+        f"🚛 *{vehicle_name}*\n"
+        f"📝 Новий RMPD: `{new_rmpd}`",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
 # === Location Check ===
 
 async def perform_check(message, vehicle_id: int, edit: bool = False):
@@ -327,6 +393,59 @@ async def perform_check(message, vehicle_id: int, edit: bool = False):
             )
         except Exception as e:
             logger.error(f"Failed to send overdue alert: {e}")
+
+
+async def perform_check_all(message):
+    """Perform location check for all vehicles."""
+    vehicles = await db.get_all_vehicles()
+    
+    if not vehicles:
+        await message.edit_text("📭 Немає авто для перевірки.")
+        return
+    
+    await message.edit_text(f"🔄 Перевіряю *{len(vehicles)} авто*...", parse_mode='Markdown')
+    
+    results = []
+    for vehicle in vehicles:
+        result = await scraper.check_location(
+            vehicle.reference_number,
+            vehicle.registration_number,
+            vehicle.locator_id
+        )
+        
+        if result.success:
+            await db.update_vehicle_location(
+                vehicle.id,
+                f"{result.latitude}, {result.longitude}",
+                result.location_time or datetime.now().isoformat()
+            )
+            
+            # Check if overdue
+            overdue = check_overdue(result.location_time)
+            status = "🚨" if overdue else "✅"
+            maps_link = f"https://maps.google.com/?q={result.latitude},{result.longitude}"
+            
+            results.append(
+                f"{status} *{vehicle.name}* ({vehicle.registration_number})\n"
+                f"   🕐 {result.location_time or 'Невідомо'}\n"
+                f"   [📍 Карта]({maps_link})"
+            )
+        else:
+            results.append(
+                f"❌ *{vehicle.name}* ({vehicle.registration_number})\n"
+                f"   Помилка: {result.error or 'Невідома'}"
+            )
+    
+    text = "🚛 *Результати перевірки всіх авто:*\n\n" + "\n\n".join(results)
+    
+    # Add legend
+    text += "\n\n_Легенда: ✅ OK | 🚨 Дані застаріли >45хв_"
+    
+    try:
+        await message.edit_text(text, parse_mode='Markdown', disable_web_page_preview=True)
+    except Exception as e:
+        logger.error(f"Markdown error in check_all: {e}")
+        await message.edit_text(text.replace('*', '').replace('_', ''), disable_web_page_preview=True)
 
 
 def parse_location_time(time_str: str) -> datetime | None:
@@ -428,6 +547,32 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
 
+    elif data == "check_all":
+        await perform_check_all(query.message)
+
+    elif data.startswith("edit_menu_"):
+        vehicle_id = int(data.split("_")[2])
+        vehicle = await db.get_vehicle(vehicle_id)
+        
+        if not vehicle:
+            await query.edit_message_text("❌ Авто не знайдено.")
+            return
+        
+        keyboard = [
+            [InlineKeyboardButton("✏️ Змінити RMPD", callback_data=f"edit_rmpd_{vehicle_id}")],
+            [InlineKeyboardButton("⬅️ Назад до списку", callback_data="list")],
+        ]
+        
+        await query.edit_message_text(
+            f"✏️ *Редагування: {vehicle.name}*\n\n"
+            f"📝 RMPD: `{vehicle.reference_number}`\n"
+            f"🚗 Номер: `{vehicle.registration_number}`\n"
+            f"📡 GPS: `{vehicle.locator_id}`\n\n"
+            "Що бажаєте змінити?",
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
     elif data.startswith("check_"):
         vehicle_id = int(data.split("_")[1])
         await perform_check(query.message, vehicle_id, edit=True)
@@ -471,7 +616,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         for v in vehicles:
             status = "✅" if v.monitoring_enabled else "❌"
-            interval = f"{v.monitoring_interval} хв" if v.monitoring_enabled else "вимкнено"
+            if not v.monitoring_enabled:
+                interval = "вимкнено"
+            elif v.monitoring_interval == 720:
+                interval = "2 рази на добу"
+            else:
+                interval = f"{v.monitoring_interval} хв"
             text += f"*{v.name}* ({v.registration_number})\n   Моніторинг: {status} {interval}\n\n"
             keyboard.append([
                 InlineKeyboardButton(f"⚙️ {v.name}", callback_data=f"sched_{v.id}")
@@ -494,11 +644,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         status = "✅ Увімкнено" if vehicle.monitoring_enabled else "❌ Вимкнено"
+        current_interval = "2 рази на добу" if vehicle.monitoring_interval == 720 else f"{vehicle.monitoring_interval} хв"
 
         keyboard = [
             [InlineKeyboardButton("⏱ 15 хв", callback_data=f"setint_{vehicle_id}_15")],
             [InlineKeyboardButton("⏱ 30 хв", callback_data=f"setint_{vehicle_id}_30")],
             [InlineKeyboardButton("⏱ 60 хв", callback_data=f"setint_{vehicle_id}_60")],
+            [InlineKeyboardButton("🌅 2 рази на добу", callback_data=f"setint_{vehicle_id}_720")],
             [InlineKeyboardButton("🔴 Вимкнути", callback_data=f"setint_{vehicle_id}_0")],
             [InlineKeyboardButton("⬅️ Назад", callback_data="schedule")],
         ]
@@ -507,7 +659,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⚙️ *Моніторинг: {vehicle.name}*\n"
             f"🚗 Номер: `{vehicle.registration_number}`\n\n"
             f"Поточний статус: {status}\n"
-            f"Інтервал: {vehicle.monitoring_interval} хв\n\n"
+            f"Інтервал: {current_interval}\n\n"
             "Виберіть інтервал перевірки:",
             parse_mode='Markdown',
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -535,9 +687,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await db.update_monitoring(vehicle_id, enabled=True, interval=interval)
             # Reschedule monitoring jobs
             await schedule_vehicle_jobs(context.application)
+            interval_text = "2 рази на добу" if interval == 720 else f"{interval} хв"
             await query.edit_message_text(
                 f"✅ Моніторинг для *{vehicle.name}* увімкнено.\n"
-                f"Інтервал перевірки: *{interval} хв*\n\n"
+                f"Інтервал перевірки: *{interval_text}*\n\n"
                 f"Якщо дані застаріють більше 45 хв - отримаєте сповіщення.",
                 parse_mode='Markdown'
             )
@@ -684,6 +837,15 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
+    
+    # Add conversation handler for editing RMPD
+    edit_rmpd_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(edit_rmpd_start, pattern=r"^edit_rmpd_\d+$")],
+        states={
+            EDIT_RMPD: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_rmpd_save)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
 
     # Add handlers
     app.add_handler(CommandHandler("start", start))
@@ -691,6 +853,7 @@ def main():
     app.add_handler(CommandHandler("delete", delete_command))
     app.add_handler(CommandHandler("schedule", schedule_command))
     app.add_handler(add_handler)
+    app.add_handler(edit_rmpd_handler)
     app.add_handler(CallbackQueryHandler(button_handler))
 
     # Run the bot

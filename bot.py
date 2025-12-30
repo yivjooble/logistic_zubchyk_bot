@@ -52,7 +52,7 @@ def parse_allowed_users() -> set[int]:
 ALLOWED_USER_IDS = parse_allowed_users()
 
 # Conversation states
-ADD_NAME, ADD_REFERENCE, ADD_REGISTRATION, ADD_LOCATOR, EDIT_RMPD = range(5)
+ADD_NAME, ADD_REFERENCE, ADD_REGISTRATION, ADD_LOCATOR, EDIT_RMPD, EDIT_NAME, EDIT_REGISTRATION, EDIT_LOCATOR = range(8)
 
 # Kyiv timezone
 KYIV_TZ = ZoneInfo("Europe/Kyiv")
@@ -320,13 +320,181 @@ async def edit_rmpd_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await db.update_vehicle_reference(vehicle_id, new_rmpd)
     
     keyboard = [[
-        InlineKeyboardButton("📍 Перевірити зараз", callback_data=f"check_{vehicle_id}")
+        InlineKeyboardButton("📍 Перевірити зараз", callback_data=f"check_{vehicle_id}"),
+        InlineKeyboardButton("✏️ Редагувати", callback_data=f"edit_menu_{vehicle_id}")
     ]]
     
     await update.message.reply_text(
         f"✅ *RMPD оновлено!*\n\n"
         f"🚛 *{vehicle_name}*\n"
         f"📝 Новий RMPD: `{new_rmpd}`",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+# === Edit Name Conversation ===
+
+async def edit_name_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start editing name for a vehicle (called from callback)."""
+    query = update.callback_query
+    await query.answer()
+    
+    vehicle_id = int(query.data.split("_")[2])
+    vehicle = await db.get_vehicle(vehicle_id)
+    
+    if not vehicle:
+        await query.edit_message_text("❌ Авто не знайдено.")
+        return ConversationHandler.END
+    
+    context.user_data['edit_vehicle_id'] = vehicle_id
+    context.user_data['edit_vehicle_name'] = vehicle.name
+    
+    await query.edit_message_text(
+        f"✏️ *Редагування назви*\n\n"
+        f"Поточна назва: `{vehicle.name}`\n\n"
+        f"Введіть нову назву (або /cancel для скасування):",
+        parse_mode='Markdown'
+    )
+    return EDIT_NAME
+
+
+async def edit_name_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Save the new name."""
+    new_name = update.message.text
+    vehicle_id = context.user_data.get('edit_vehicle_id')
+    old_name = context.user_data.get('edit_vehicle_name', 'Авто')
+    
+    if not vehicle_id:
+        await update.message.reply_text("❌ Помилка: ID авто не знайдено.")
+        return ConversationHandler.END
+    
+    await db.update_vehicle_name(vehicle_id, new_name)
+    
+    keyboard = [[
+        InlineKeyboardButton("📍 Перевірити зараз", callback_data=f"check_{vehicle_id}"),
+        InlineKeyboardButton("✏️ Редагувати", callback_data=f"edit_menu_{vehicle_id}")
+    ]]
+    
+    await update.message.reply_text(
+        f"✅ *Назву оновлено!*\n\n"
+        f"🚛 Було: `{old_name}`\n"
+        f"🚛 Стало: `{new_name}`",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+# === Edit Registration Conversation ===
+
+async def edit_registration_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start editing registration number for a vehicle (called from callback)."""
+    query = update.callback_query
+    await query.answer()
+    
+    vehicle_id = int(query.data.split("_")[2])
+    vehicle = await db.get_vehicle(vehicle_id)
+    
+    if not vehicle:
+        await query.edit_message_text("❌ Авто не знайдено.")
+        return ConversationHandler.END
+    
+    context.user_data['edit_vehicle_id'] = vehicle_id
+    context.user_data['edit_vehicle_name'] = vehicle.name
+    context.user_data['edit_old_value'] = vehicle.registration_number
+    
+    await query.edit_message_text(
+        f"✏️ *Редагування номера авто для {vehicle.name}*\n\n"
+        f"Поточний номер: `{vehicle.registration_number}`\n\n"
+        f"Введіть новий номер авто (або /cancel для скасування):",
+        parse_mode='Markdown'
+    )
+    return EDIT_REGISTRATION
+
+
+async def edit_registration_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Save the new registration number."""
+    new_reg = update.message.text
+    vehicle_id = context.user_data.get('edit_vehicle_id')
+    vehicle_name = context.user_data.get('edit_vehicle_name', 'Авто')
+    
+    if not vehicle_id:
+        await update.message.reply_text("❌ Помилка: ID авто не знайдено.")
+        return ConversationHandler.END
+    
+    await db.update_vehicle_registration(vehicle_id, new_reg)
+    
+    keyboard = [[
+        InlineKeyboardButton("📍 Перевірити зараз", callback_data=f"check_{vehicle_id}"),
+        InlineKeyboardButton("✏️ Редагувати", callback_data=f"edit_menu_{vehicle_id}")
+    ]]
+    
+    await update.message.reply_text(
+        f"✅ *Номер авто оновлено!*\n\n"
+        f"🚛 *{vehicle_name}*\n"
+        f"🚗 Новий номер: `{new_reg}`",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+# === Edit Locator Conversation ===
+
+async def edit_locator_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start editing locator ID for a vehicle (called from callback)."""
+    query = update.callback_query
+    await query.answer()
+    
+    vehicle_id = int(query.data.split("_")[2])
+    vehicle = await db.get_vehicle(vehicle_id)
+    
+    if not vehicle:
+        await query.edit_message_text("❌ Авто не знайдено.")
+        return ConversationHandler.END
+    
+    context.user_data['edit_vehicle_id'] = vehicle_id
+    context.user_data['edit_vehicle_name'] = vehicle.name
+    context.user_data['edit_old_value'] = vehicle.locator_id
+    
+    await query.edit_message_text(
+        f"✏️ *Редагування GPS ID для {vehicle.name}*\n\n"
+        f"Поточний GPS ID: `{vehicle.locator_id}`\n\n"
+        f"Введіть новий GPS ID локатора (або /cancel для скасування):",
+        parse_mode='Markdown'
+    )
+    return EDIT_LOCATOR
+
+
+async def edit_locator_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Save the new locator ID."""
+    new_locator = update.message.text
+    vehicle_id = context.user_data.get('edit_vehicle_id')
+    vehicle_name = context.user_data.get('edit_vehicle_name', 'Авто')
+    
+    if not vehicle_id:
+        await update.message.reply_text("❌ Помилка: ID авто не знайдено.")
+        return ConversationHandler.END
+    
+    await db.update_vehicle_locator(vehicle_id, new_locator)
+    
+    keyboard = [[
+        InlineKeyboardButton("📍 Перевірити зараз", callback_data=f"check_{vehicle_id}"),
+        InlineKeyboardButton("✏️ Редагувати", callback_data=f"edit_menu_{vehicle_id}")
+    ]]
+    
+    await update.message.reply_text(
+        f"✅ *GPS ID оновлено!*\n\n"
+        f"🚛 *{vehicle_name}*\n"
+        f"📡 Новий GPS ID: `{new_locator}`",
         parse_mode='Markdown',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -565,12 +733,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
         keyboard = [
-            [InlineKeyboardButton("✏️ Змінити RMPD", callback_data=f"edit_rmpd_{vehicle_id}")],
+            [InlineKeyboardButton("🚛 Змінити назву", callback_data=f"edit_name_{vehicle_id}")],
+            [InlineKeyboardButton("📝 Змінити RMPD", callback_data=f"edit_rmpd_{vehicle_id}")],
+            [InlineKeyboardButton("🚗 Змінити номер авто", callback_data=f"edit_reg_{vehicle_id}")],
+            [InlineKeyboardButton("📡 Змінити GPS ID", callback_data=f"edit_loc_{vehicle_id}")],
             [InlineKeyboardButton("⬅️ Назад до списку", callback_data="list")],
         ]
         
         await query.edit_message_text(
             f"✏️ *Редагування: {vehicle.name}*\n\n"
+            f"🚛 Назва: `{vehicle.name}`\n"
             f"📝 RMPD: `{vehicle.reference_number}`\n"
             f"🚗 Номер: `{vehicle.registration_number}`\n"
             f"📡 GPS: `{vehicle.locator_id}`\n\n"
@@ -848,6 +1020,33 @@ def main():
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
+    
+    # Add conversation handler for editing name
+    edit_name_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(edit_name_start, pattern=r"^edit_name_\d+$")],
+        states={
+            EDIT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_name_save)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    
+    # Add conversation handler for editing registration number
+    edit_reg_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(edit_registration_start, pattern=r"^edit_reg_\d+$")],
+        states={
+            EDIT_REGISTRATION: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_registration_save)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    
+    # Add conversation handler for editing locator ID
+    edit_loc_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(edit_locator_start, pattern=r"^edit_loc_\d+$")],
+        states={
+            EDIT_LOCATOR: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_locator_save)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
 
     # Add handlers
     app.add_handler(CommandHandler("start", start))
@@ -856,6 +1055,9 @@ def main():
     app.add_handler(CommandHandler("schedule", schedule_command))
     app.add_handler(add_handler)
     app.add_handler(edit_rmpd_handler)
+    app.add_handler(edit_name_handler)
+    app.add_handler(edit_reg_handler)
+    app.add_handler(edit_loc_handler)
     app.add_handler(CallbackQueryHandler(button_handler))
 
     # Run the bot

@@ -93,7 +93,7 @@ async def delete_vehicle(vehicle_id: int) -> bool:
         return True
 
 
-async def update_monitoring(vehicle_id: int, enabled: bool, interval: int = None):
+async def update_monitoring(vehicle_id: int, enabled: bool, interval: Optional[int] = None):
     """Update monitoring settings for a vehicle."""
     async with aiosqlite.connect(DB_PATH) as db:
         if interval is not None:
@@ -140,5 +140,35 @@ async def update_vehicle_reference(vehicle_id: int, reference_number: str):
         await db.execute(
             "UPDATE vehicles SET reference_number = ? WHERE id = ?",
             (reference_number, vehicle_id)
+        )
+        await db.commit()
+
+
+async def update_vehicle_name(vehicle_id: int, name: str):
+    """Update the name for a vehicle."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE vehicles SET name = ? WHERE id = ?",
+            (name, vehicle_id)
+        )
+        await db.commit()
+
+
+async def update_vehicle_registration(vehicle_id: int, registration_number: str):
+    """Update the registration number for a vehicle."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE vehicles SET registration_number = ? WHERE id = ?",
+            (registration_number, vehicle_id)
+        )
+        await db.commit()
+
+
+async def update_vehicle_locator(vehicle_id: int, locator_id: str):
+    """Update the locator ID (GPS) for a vehicle."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "UPDATE vehicles SET locator_id = ? WHERE id = ?",
+            (locator_id, vehicle_id)
         )
         await db.commit()
